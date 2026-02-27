@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>🔍 Scanner Spesa</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #111;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background: #2d7a4f;
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        header h1 { font-size: 18px; font-weight: 600; }
+        header a {
+            color: rgba(255,255,255,0.8);
+            text-decoration: none;
+            font-size: 13px;
+        }
+
+        /* Camera */
+        #reader-wrap {
+            position: relative;
+            background: #000;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 300px;
+        }
+        #reader {
+            width: 100%;
+            max-width: 500px;
+        }
+        /* Cornice mirino */
+        .mirino {
+            position: absolute;
+            width: 220px; height: 220px;
+            border: 3px solid #2d7a4f;
+            border-radius: 16px;
+            box-shadow: 0 0 0 9999px rgba(0,0,0,0.45);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        /* Stato scansione */
+        #status-bar {
+            background: #1a1a1a;
+            padding: 14px 20px;
+            text-align: center;
+            font-size: 14px;
+            color: #aaa;
+            min-height: 52px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        #status-bar.success { color: #4ade80; }
+        #status-bar.error   { color: #f87171; }
+        #status-bar.loading { color: #fbbf24; }
+
+        /* Lista scansionati */
+        #lista-wrap {
+            background: #1a1a1a;
+            flex: 1;
+            overflow-y: auto;
+            max-height: 40vh;
+        }
+        #lista-titolo {
+            padding: 12px 20px 4px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #555;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .prodotto-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 20px;
+            border-bottom: 1px solid #2a2a2a;
+            animation: slideIn 0.25s ease;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .prodotto-ico { font-size: 22px; width: 32px; text-align: center; }
+        .prodotto-info { flex: 1; }
+        .prodotto-nome { font-size: 14px; font-weight: 600; color: #fff; }
+        .prodotto-marca { font-size: 12px; color: #666; margin-top: 2px; }
+        .prodotto-badge {
+            font-size: 11px;
+            padding: 3px 9px;
+            border-radius: 10px;
+            background: #2d7a4f22;
+            color: #4ade80;
+        }
+        .prodotto-badge.offline { background: #f8713322; color: #fb923c; }
+
+        /* Input manuale */
+        .manuale-wrap {
+            background: #111;
+            padding: 14px 20px;
+            display: flex;
+            gap: 10px;
+        }
+        .manuale-wrap input {
+            flex: 1;
+            background: #222;
+            border: 1.5px solid #333;
+            border-radius: 10px;
+            padding: 10px 14px;
+            color: #fff;
+            font-size: 14px;
+            outline: none;
+        }
+        .manuale-wrap input:focus { border-color: #2d7a4f; }
+        .manuale-wrap button {
+            background: #2d7a4f;
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 18px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .manuale-wrap button:active { opacity: 0.8; }
+
+        /* Bottone home */
+        .btn-home {
+            display: block;
+            text-align: center;
+            padding: 14px;
+            background: #2d7a4f;
+            color: #fff;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .btn-home:active { opacity: 0.85; }
+
+        /* Spinner */
+        .spin {
+            display: inline-block;
+            width: 16px; height: 16px;
+            border: 2px solid #fbbf2444;
+            border-top-color: #fbbf24;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>🔍 Scanner Spesa</h1>
+    <a href="/">← Dispensa</a>
+</header>
+
+<div id="reader-wrap">
+    <div class="mirino"></div>
+    <div id="reader"></div>
+</div>
+
+<div id="status-bar">📷 Punta la fotocamera sul barcode</div>
+
+<div class="manuale-wrap">
+    <input id="input-manuale" type="number" placeholder="Inserisci barcode manualmente..." inputmode="numeric">
+    <button onclick="inviaManuale()">Invia</button>
+</div>
+
+<div id="lista-wrap">
+    <div id="lista-titolo">Scansionati questa sessione</div>
+    <div id="lista"></div>
+</div>
+
+<a href="/" class="btn-home">📋 Vai alla Dispensa</a>
+
+<script>
+    const ICONE = {
+        'Bevande': '🥤', 'Latticini': '🧀', 'Carne': '🥩', 'Pesce': '🐟',
+        'Verdura': '🥦', 'Frutta': '🍎', 'Pasta': '🍝', 'Cereali': '🌾',
+        'Snack': '🍪', 'Dolci': '🍰', 'Surgelati': '❄️', 'Conserve': '🥫',
+        'Condimenti': '🫙', 'Pane': '🍞',
+    };
+
+    function icona(categoria) {
+        if (!categoria) return '🛒';
+        for (const [k, v] of Object.entries(ICONE)) {
+            if (categoria.toLowerCase().includes(k.toLowerCase())) return v;
+        }
+        return '🛒';
+    }
+
+    function setStatus(msg, tipo = '') {
+        const el = document.getElementById('status-bar');
+        el.className = tipo;
+        el.innerHTML = msg;
+    }
+
+    const scansionati = new Set();
+
+    function onScanSuccess(decodedText) {
+        if (scansionati.has(decodedText)) return;
+        scansionati.add(decodedText);
+
+        // Vibrazione feedback
+        if (navigator.vibrate) navigator.vibrate(100);
+
+        setStatus('<span class="spin"></span> Ricerca prodotto...', 'loading');
+        inviaScan(decodedText);
+    }
+
+    function inviaManuale() {
+        const val = document.getElementById('input-manuale').value.trim();
+        if (!val) return;
+        document.getElementById('input-manuale').value = '';
+        if (scansionati.has(val)) {
+            setStatus('⚠️ Barcode già scansionato', 'error');
+            return;
+        }
+        scansionati.add(val);
+        setStatus('<span class="spin"></span> Ricerca prodotto...', 'loading');
+        inviaScan(val);
+    }
+
+    function inviaScan(barcode) {
+        fetch('/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ barcode })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                setStatus(`✅ Aggiunto: <strong>${data.nome}</strong>`, 'success');
+                aggiungiAllaLista(data, barcode);
+                setTimeout(() => setStatus('📷 Punta sul prossimo barcode'), 2500);
+            } else {
+                setStatus(`❌ ${data.message || 'Errore'}`, 'error');
+                scansionati.delete(barcode);
+                setTimeout(() => setStatus('📷 Punta la fotocamera sul barcode'), 2500);
+            }
+        })
+        .catch(() => {
+            setStatus('❌ Errore di rete', 'error');
+            scansionati.delete(barcode);
+            setTimeout(() => setStatus('📷 Punta la fotocamera sul barcode'), 2500);
+        });
+    }
+
+    function aggiungiAllaLista(data, barcode) {
+        const lista = document.getElementById('lista');
+        const div = document.createElement('div');
+        div.className = 'prodotto-item';
+        const trovato = data.trovato_online;
+        div.innerHTML = `
+            <div class="prodotto-ico">${icona(null)}</div>
+            <div class="prodotto-info">
+                <div class="prodotto-nome">${data.nome}</div>
+                <div class="prodotto-marca">${data.marca || barcode}</div>
+            </div>
+            <span class="prodotto-badge ${trovato ? '' : 'offline'}">
+                ${trovato ? '✅ Online' : '📦 Locale'}
+            </span>`;
+        lista.insertBefore(div, lista.firstChild);
+    }
+
+    // Avvio scanner fotocamera
+    const html5QrCode = new Html5Qrcode("reader");
+    const config = {
+        fps: 10,
+        qrbox: { width: 220, height: 220 },
+        formatsToSupport: [
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+        ]
+    };
+
+    html5QrCode.start(
+        { facingMode: "environment" },
+        config,
+        onScanSuccess,
+        () => {} // Errori silenziosi (frame non leggibili)
+    ).catch(err => {
+        setStatus('⚠️ Fotocamera non disponibile. Usa il campo manuale.', 'error');
+        console.error(err);
+    });
+
+    // Input manuale con invio da tastiera
+    document.getElementById('input-manuale').addEventListener('keydown', e => {
+        if (e.key === 'Enter') inviaManuale();
+    });
+</script>
+</body>
+</html>

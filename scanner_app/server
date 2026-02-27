@@ -1,0 +1,241 @@
+
+# =============================================================================
+# app.py — Il cuore del backend: server Flask + scheduler notifiche
+# =============================================================================
+# Questo è il file principale da avviare: python app.py
+#
+# Flask è un "micro-framework web": gestisce le richieste HTTP in arrivo
+# (dallo scanner, dal browser) e restituisce risposte JSON o HTML.
+
+from flask import Flask, request, jsonify, render_template_string
+from apscheduler.schedulers.background import BackgroundScheduler  # Scheduler per i job automatici
+import atexit
+
+from config import HOST, PORT, DEBUG, GIORNI_PREAVVISO
+from database import (
+    init_db, inserisci_prodotto, get_tutti_prodotti,
+    get_prodotto_by_id, aggiorna_scadenza, elimina_prodotto
+)
+from prodotti import cerca_prodotto
+from notifiche import controlla_e_notifica
+from ricette import genera_ricette
+
+# Creiamo l'applicazione Flask
+app = Flask(__name__)
+
+
+# =============================================================================
+# ROUTE: Ricezione scansione dallo scanner (usata dall'app Kivy)
+# =============================================================================
+
+@app.route('/scan', methods=['POST'])
+def receive_scan():
+    """
+    Riceve il barcode dallo scanner, cerca il prodotto su Open Food Facts
+    e lo salva nel database.
+    
+    Risponde con i dati del prodotto trovato, così lo scanner può
+    mostrare il nome sullo schermo.
+    """
+    dati = request.json
+    
+    if not dati or not dati.get('barcode'):
+        return jsonify({'status': 'error', 'message': 'Barcode mancante'}), 400
+    
+    barcode = dati['barcode'].strip()
+    
+    # Cerchiamo il prodotto su Open Food Facts
+    print(f"🔍 Ricerca barcode: {barcode}")
+    prodotto = cerca_prodotto(barcode)
+    
+    # Salviamo nel database
+    # La data di scadenza non la conosciamo ancora — l'utente la inserirà dall'interfaccia
+    prodotto_id = inserisci_prodotto(
+        barcode=barcode,
+        nome=prodotto['nome'],
+        marca=prodotto['marca'],
+        categoria=prodotto['categoria'],
+        data_scadenza=None  # Da inserire manualmente dall'interfaccia web
+    )
+    
+    print(f"✅ Salvato: {prodotto['nome']} (ID: {prodotto_id})")
+    
+    # Rispondiamo allo scanner con i dati del prodotto
+    return jsonify({
+        'status': 'success',
+        'id': prodotto_id,
+        'nome': prodotto['nome'],
+        'marca': prodotto['marca'],
+        'trovato_online': prodotto['trovato']
+    }), 201
+
+
+# =============================================================================
+# ROUTE: API REST per gestire i prodotti (usata dall'interfaccia web)
+# =============================================================================
+
+@app.route('/prodotti', methods=['GET'])
+def lista_prodotti():
+    """Restituisce tutti i prodotti in formato JSON."""
+    prodotti = get_tutti_prodotti()
+    return jsonify(prodotti)
+
+
+@app.route('/prodotti/<int:prodotto_id>', methods=['GET'])
+def dettaglio_prodotto(prodotto_id):
+    """Restituisce i dettagli di un singolo prodotto."""
+    prodotto = get_prodotto_by_id(prodotto_id)
+    if not prodotto:
+        return jsonify({'error': 'Prodotto non trovato'}), 404
+    return jsonify(prodotto)
+
+
+@app.route('/prodotti/<int:prodotto_id>/scadenza', methods=['PUT'])
+def aggiorna_data_scadenza(prodotto_id):
+    """
+    Aggiorna la data di scadenza di un prodotto.
+    
+    Il metodo PUT viene usato per "aggiornare" una risorsa esistente.
+    Il corpo della richiesta deve contenere: {"data_scadenza": "2025-12-31"}
+    """
+    dati = request.json
+    data_scadenza = dati.get('data_scadenza')
+    
+    if not data_scadenza:
+        return jsonify({'error': 'data_scadenza mancante'}), 400
+    
+    aggiorna_scadenza(prodotto_id, data_scadenza)
+    return jsonify({'status': 'success', 'message': 'Data aggiornata'})
+
+
+@app.route('/prodotti/<int:prodotto_id>', methods=['DELETE'])
+def cancella_prodotto(prodotto_id):
+    """
+    Elimina un prodotto dal database.
+    
+    Il metodo DELETE viene usato per "eliminare" una risorsa.
+    """
+    elimina_prodotto(prodotto_id)
+    return jsonify({'status': 'success', 'message': 'Prodotto eliminato'})
+
+
+# =============================================================================
+# ROUTE: Ricette AI
+# =============================================================================
+
+@app.route('/ricette', methods=['GET'])
+def suggerisci_ricette():
+    """
+    Chiede all'AI di suggerire ricette con gli ingredienti disponibili.
+    Può richiedere qualche secondo — l'AI deve elaborare la richiesta.
+    """
+    print("🤖 Generazione ricette in corso...")
+    ricette = genera_ricette()
+    return jsonify(ricette)
+
+
+# =============================================================================
+# ROUTE: Notifiche manuali (per test)
+# =============================================================================
+
+@app.route('/notifiche/test', methods=['POST'])
+def test_notifica():
+    """
+    Forza il controllo scadenze manualmente.
+    Utile per testare che le notifiche funzionino senza aspettare lo scheduler.
+    """
+    controlla_e_notifica()
+    return jsonify({'status': 'success', 'message': 'Controllo scadenze eseguito'})
+
+
+# =============================================================================
+# ROUTE: Interfaccia web semplice (dashboard)
+# =============================================================================
+
+@app.route('/', methods=['GET'])
+def dashboard():
+    """
+    Una pagina HTML minimale per vedere lo stato del sistema.
+    In futuro questa diventerà un'interfaccia completa per gestire la dispensa.
+    """
+    prodotti = get_tutti_prodotti()
+    
+    # Template HTML inline — in futuro useremo file .html separati nella cartella /templates
+    html = """
+    <!DOCTYPE html>
+    <html lang="it">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>FrigoSmart</title>
+        <style>
+            body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+            h1 { color: #2d7a4f; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+            th { background: #f5f5f5; }
+            .scade { color: #c45c1a; font-weight: bold; }
+            .api-links { margin-top: 30px; padding: 15px; background: #f9f9f9; border-radius: 8px; }
+            .api-links a { margin-right: 15px; color: #2d7a4f; }
+        </style>
+    </head>
+    <body>
+        <h1>🥦 FrigoSmart — Dashboard</h1>
+        <p>Prodotti in dispensa: <strong>{{ prodotti|length }}</strong></p>
+        
+        <table>
+            <tr><th>Nome</th><th>Marca</th><th>Categoria</th><th>Scadenza</th></tr>
+            {% for p in prodotti %}
+            <tr>
+                <td>{{ p.nome_prodotto }}</td>
+                <td>{{ p.marca or '—' }}</td>
+                <td>{{ p.categoria or '—' }}</td>
+                <td class="{{ 'scade' if p.data_scadenza else '' }}">
+                    {{ p.data_scadenza or 'Da inserire' }}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+        
+        <div class="api-links">
+            <strong>API disponibili:</strong><br><br>
+            <a href="/prodotti">GET /prodotti</a>
+            <a href="/ricette">GET /ricette</a>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # render_template_string compila il template sostituendo {{ variabili }}
+    from flask import render_template_string
+    return render_template_string(html, prodotti=prodotti)
+
+
+# =============================================================================
+# AVVIO: Scheduler e server
+# =============================================================================
+
+if __name__ == '__main__':
+    # 1. Inizializziamo il database (crea le tabelle se non esistono)
+    init_db()
+    
+    # 2. Avviamo lo scheduler per i controlli automatici delle scadenze
+    #    BackgroundScheduler gira in un thread separato senza bloccare Flask
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(
+        func=controlla_e_notifica,
+        trigger='cron',         # 'cron' = orario fisso, come il crontab di Linux
+        hour=9,                 # Alle 9:00 di ogni mattina
+        minute=0,
+        id='controllo_scadenze'
+    )
+    scheduler.start()
+    print("⏰ Scheduler avviato — controllo scadenze ogni mattina alle 9:00")
+    
+    # atexit assicura che lo scheduler venga fermato correttamente quando chiudi il server
+    atexit.register(lambda: scheduler.shutdown())
+    
+    # 3. Avviamo il server Flask
+    print(f"🚀 Server avviato su http://{HOST}:{PORT}")
+    print(f"📱 Gli scanner devono puntare a: http://<IP-DEL-PC>:{PORT}/scan")
+    app.run(host=HOST, port=PORT, debug=DEBUG)

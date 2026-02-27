@@ -1,0 +1,74 @@
+import cv2
+from kivy.app import App
+from kivy.uix.image import Image
+from kivy.clock import Clock
+from kivy.graphics.texture import Texture
+from kivy.network.urlrequest import UrlRequest  # <--- NOVITÀ: Per parlare con il server
+from pyzbar.pyzbar import decode
+import json
+
+class SmartScanner(Image):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.capture = cv2.VideoCapture(0)
+        # Variabile di controllo per evitare di inviare lo stesso codice 100 volte al secondo
+        self.is_sending = False 
+        Clock.schedule_interval(self.update, 1.0 / 30)
+
+    def update(self, dt):
+        ret, frame = self.capture.read()
+        if ret:
+            barcodes = decode(frame)
+            for barcode in barcodes:
+                barcode_data = barcode.data.decode('utf-8')
+                
+                # Se non stiamo già inviando dati, avviamo la richiesta
+                if not self.is_sending:
+                    print(f"Codice Rilevato: {barcode_data}")
+                    self.send_data_to_server(barcode_data)
+
+            # Trasformazione immagine per Kivy
+            buf = cv2.flip(frame, 0).tobytes()
+            texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
+            texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+            self.texture = texture
+
+    def send_data_to_server(self, code):
+        """Questa funzione crea il pacchetto e lo spedisce al backend"""
+        self.is_sending = True  # Blocchiamo altri invii temporaneamente
+        
+        # L'indirizzo del tuo server Flask (usa l'IP del PC se sei su Wi-Fi)
+        url = 'http://127.0.0.1:5000/scan' 
+        
+        # Prepariamo i dati in formato JSON
+        headers = {'Content-type': 'application/json'}
+        payload = json.dumps({'barcode': code})
+
+        # UrlRequest: invia il dato senza bloccare l'app
+        url='http://192.168.0.113:5000/scan'
+        UrlRequest(url, 
+            req_body=payload, 
+            req_headers=headers, 
+            on_success=self.on_success,
+            on_failure=self.on_error,
+            on_error=self.on_error
+        )
+
+    def on_success(self, req, result):
+        print("✅ Dati inviati con successo!")
+        # Aspettiamo 2 secondi prima di permettere un'altra scansione
+        Clock.schedule_once(self.reset_scanner, 2)
+
+    def on_error(self, req, error):
+        print(f"❌ Errore di connessione: {error}")
+        self.is_sending = False
+
+    def reset_scanner(self, dt):
+        self.is_sending = False
+
+class ScannerApp(App):
+    def build(self):
+        return SmartScanner()
+
+if __name__ == '__main__':
+    ScannerApp().run()
