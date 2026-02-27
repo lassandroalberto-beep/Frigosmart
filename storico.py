@@ -1,4 +1,3 @@
-
 Copia
 
 # =============================================================================
@@ -6,7 +5,7 @@ Copia
 # =============================================================================
 
 from database import (
-    registra_consumo, registra_spreco,
+    registra_consumo,
     get_storico_mensile, get_statistiche_mensili
 )
 
